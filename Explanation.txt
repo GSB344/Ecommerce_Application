@@ -1,0 +1,170 @@
+Here is a detailed explanation of the work as a junior developer, without revealing the company:
+
+  ---
+  Detailed Responsibilities — Device Payment Plan (DPP) Backend Service
+
+  ---
+  1. REST API Layer (DevicePaymentPlanImpl)
+
+  I worked on the controller/implementation layer of a financial microservice that handles device installment plans for a telecom
+  company.
+
+  The service exposes JAX-RS REST APIs (not Spring MVC — uses @GET, @POST, @PATCH, @DELETE annotations with @Path). My job was to:
+  - Receive incoming HTTP requests
+  - Pass the request through a mapper to convert REST request objects into service-layer objects
+  - Call the corresponding service method
+  - Wrap the result in a BaseResult<T> response wrapper before returning it
+
+  Example: For the authorization API, I received a customer's profile (name, SSN, DOB, address), passed it to the service layer which
+   invoked an external credit bureau, and returned back a decisionId, status (APPROVED/DECLINED/NO-DECISION), spendingLimit, and
+  downPaymentPercentage.
+
+  ---
+  2. Authorization & Eligibility Flow
+
+  This was one of the core flows I worked on. The authorization API triggers a credit check:
+  - Takes customer profile details (first name, last name, SSN, DOB, email, phone, alternate address)
+  - Calls an external credit bureau proxy (Equifax) to evaluate creditworthiness
+  - Returns a decisionId with status — APPROVED, DECLINED, NO-DECISION, or EXPIRED
+  - The decision includes a spendingLimit (how much the customer can finance) and downPaymentPercentage
+
+  I also worked on the eligibility update API (PATCH /eligibility) which patches existing DPP/DMP eligibility in bulk. This involved
+  handling partial failure scenarios — if some entries succeeded and some failed, we return an IncompleteBaseResult with both success
+   data and error details. If all entries failed with 404, we throw a ServicesException(S0106). If all failed with 400, throw
+  ServicesException(D0030). This required careful error classification logic.
+
+  ---
+  3. Enrollment Flow (Two-Step Process)
+
+  The enrollment is a two-step flow:
+
+  Step 1 — Temp Hold (POST /decisions/{decisionId}/temphold):
+  - After a decision is approved, the channel places a "temp hold" on specific devices the customer wants to purchase
+  - Request carries device details: dppAmount, deviceAmount, downpayment, instantDiscount, instantTradeInDiscount, monthlyPayment,
+  finalMonthlyPayment, taxes, orderType, agentId
+  - This locks the pricing at that point in time
+
+  Step 2 — Enroll (POST /decisions/{decisionId}/enroll):
+  - Finalizes the device payment plan and creates an agreementId
+  - The service validates that the dppAmount matches the authorized amount (throws D0015 if it exceeds the limit, D0018 if it doesn't
+   match)
+  - On success, the customer is enrolled and an agreement is active
+
+  There is also an exchange flow (POST /decisions/{decisionId}/agreements/{oldAgreementId}/exchange) for device upgrades — it
+  temp-holds a new device while cancelling the old agreement.
+
+  ---
+  4. Agreement Lifecycle Management
+
+  I contributed to APIs that manage the full lifecycle of an agreement:
+
+  - Update Agreement (PATCH /agreements/{agreementid}) — Modify an existing active agreement's details
+  - Cancel Agreement (DELETE /agreements/{agreementid}/cancel) — Cancel when a customer returns or abandons a purchase. Returns a
+  CancelAgreementResponse with status SUCCESS
+  - Get Agreement by ID (GET /agreements/{agreementid}) — Fetch full DPP + DMP details tied to an agreement
+  - Get All Agreements for Account (GET /accounts/{accountNumber}/agreements) — Returns all active agreements for a customer account
+
+  The service uses error constants extensively — for example, R0001 means "Agreement Id specified not found", D0012 means "Agreement
+  Id specified not active", U0002 means "Agreement is already cancelled". These were important to return the correct error code to
+  the caller.
+
+  ---
+  5. Reconnect API (Versioned)
+
+  I worked on the reconnect flow which reactivates a DPP agreement after a service disconnection. There are two versions:
+  - v1.1 (PATCH /dpp/1.1/.../reconnect) — Takes categoryCode, occurrenceNumber, and serviceCode to identify the service line
+  - v1.0 (PATCH /dpp/1.0/.../reconnect) — A legacy version (hidden from public Swagger docs) that takes only occurrenceNumber and
+  serviceCode
+
+  The versioning was handled by having two separate interface methods — reconnectDpp() and reconnectDpp_v0() — both calling the
+  service layer with slightly different mapped request objects.
+
+  ---
+  6. Account Transfer (JMS-driven)
+
+  The transfer API (POST /accounts/{oldAccountNumber}/transfer) moves all DPP agreements from one account to another. This is
+  interesting because:
+  - The REST call initiates the transfer
+  - But there is also an asynchronous JMS listener (IcomsDppTransferEventsListener) that listens on a message queue for transfer
+  events coming from a backend billing system
+  - On receiving a JMS TextMessage, it deserializes it into an IcomsDppTransferMessage (contains fromSiteId, fromAccountNumber,
+  toAccountNumber, agreementId, etc.) and delegates to dppService.processIcomsDppTransfers()
+  - This was my first exposure to asynchronous event-driven processing via JMS in a Spring microservice
+
+  ---
+  7. Promotions Module (DMP — Device Marketing Promotions)
+
+  Device Marketing Promotions (DMP) are monthly discounts tied to a DPP agreement. I worked on:
+  - DMP Enroll (POST /dpp/promotions/1.0/.../dmp/enroll) — Enroll a device into a promotional discount program
+  - Swap Promo Code (PUT /dpp/promotions/1.0/.../dmp/{oldPromoCode}/swap) — Swap one promotion for another. Validates the old promo
+  code exists (throws D0033 if not), validates duration must match existing (D0035), totalDiscountAmount must be >= existing (D0036),
+   monthlyDiscountAmount >= existing (D0037)
+  - Get DMP Payments (GET /dpp/promotions/1.0/.../dmp/{promoCode}/payments) — Returns past and future promotion payment details
+  including nextPromotionAmount and past promotion history
+
+  ---
+  8. Mapper Pattern (MapStruct)
+
+  I learned and used MapStruct (@Mapper) for converting between REST layer objects and service layer objects. The DPPMapper interface
+   defines mapping methods like:
+  - mapAuthorizationRequest() — REST CustomerProfileRequest → Service CustomerProfileRequest
+  - mapDPPAuthorizationResponse() — Service AuthorizationResponse → REST AuthorizationResponse
+  - mapTempHoldRequest(), mapDppEnrollmentRequest(), mapReconnectDPPRequestInfo() etc.
+
+  This keeps the REST contract completely decoupled from the internal service data models — an important design principle I
+  implemented consistently.
+
+  ---
+  9. Exception Handling
+
+  I worked extensively with the custom exception hierarchy:
+  - ServicesException — Business logic failures (wrong data, validation errors)
+  - ResourceException — Resource not found (agreement not found, account not found)
+  - BadDataException — Invalid input data
+  - ProxySystemException — External system (credit bureau, billing system) failures
+  - AuthenticationException — Auth failures
+
+  Each exception maps to a code constant in MSDppExceptionConstants (e.g., D0008 = "Decision Id not found", R0008 = "Device payment
+  plan already exists"). The ConstraintViolationErrorTranslator handles @Valid bean validation failures and translates them into
+  consistent error responses.
+
+  ---
+  10. Scheduled Jobs
+
+  I also contributed to a scheduled background job — DecisionExpiryJob:
+  - Runs on a configurable cron schedule (decisionExpiryJob.job.schedule)
+  - Uses a SingletonJobScheduler to ensure only one instance runs across the cluster
+  - Calls dppService.setDecisionsToExpired() to expire old pending decisions that haven't been acted upon
+
+  This was my introduction to singleton job scheduling patterns in distributed Spring services.
+
+  ---
+  11. Support/Internal APIs
+
+  I built a few internal-only APIs (marked @Hidden so they don't appear in public Swagger docs) for the operations support team:
+  - Delete all decisions for a test account — Protected by an allowlist in config (dpp.supportapi.allowedAccounts), throws D0007 if
+  account not whitelisted
+  - Get active IMEIs tied to an account
+  - Update decision status manually — Also allowlist-protected
+
+  ---
+  Summary of Technical Stack
+
+  ┌───────────────────────┬────────────────────────────────────────────────────────────────────────────┐
+  │         Area          │                                 Technology                                 │
+  ├───────────────────────┼────────────────────────────────────────────────────────────────────────────┤
+  │ Framework             │ Spring Boot, JAX-RS                                                        │
+  ├───────────────────────┼────────────────────────────────────────────────────────────────────────────┤
+  │ Mapping               │ MapStruct                                                                  │
+  ├───────────────────────┼────────────────────────────────────────────────────────────────────────────┤
+  │ Async Messaging       │ JMS (Jakarta JMS)                                                          │
+  ├───────────────────────┼────────────────────────────────────────────────────────────────────────────┤
+  │ Scheduling            │ Custom SingletonJobScheduler                                               │
+  ├───────────────────────┼────────────────────────────────────────────────────────────────────────────┤
+  │ DB Access             │ Custom DAO layer, DataSource (mobility-finance-dpp)                        │
+  ├───────────────────────┼────────────────────────────────────────────────────────────────────────────┤
+  │ External Integrations │ REST proxies (credit bureau, inventory, billing system, customer platform) │
+  ├───────────────────────┼────────────────────────────────────────────────────────────────────────────┤
+  │ Validation            │ Bean Validation (@Valid, @NotNull, @NotBlank), custom interceptor          │
+  ├───────────────────────┼────────────────────────────────────────────────────────────────────────────┤
+  │ Error Handling        │ Typed exception hierarchy + constant error codes                           │
