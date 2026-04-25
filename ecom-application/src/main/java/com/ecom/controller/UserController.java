@@ -1,6 +1,7 @@
 package com.ecom.controller;
 
-import com.ecom.user.User;
+import com.ecom.dtos.UserRequest;
+import com.ecom.dtos.UserResponse;
 import com.ecom.userservice.UserService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -17,15 +18,14 @@ public class UserController {
     @Autowired
     private UserService userService;
 
-    private List<User>userList = new ArrayList<>();
 
     @GetMapping("")
-    public ResponseEntity<List<User>> getAllUsers(){
+    public ResponseEntity<List<UserResponse>> getAllUsers(){
         return ResponseEntity.ok(userService.getUserList());
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<User> getUser(@PathVariable Long id){
+    public ResponseEntity<UserResponse> getUser(@PathVariable Long id){
 //        if(userService.getUser(id)==null){
 //            return ResponseEntity.notFound().build();
 //        }
@@ -36,13 +36,14 @@ public class UserController {
     }
 
     @PostMapping("")
-    public ResponseEntity<List<User>>createUser(@RequestBody User user){
-        return new ResponseEntity<>(userService.createUser(user),HttpStatus.CREATED);
+    public ResponseEntity<String>createUser(@RequestBody UserRequest userRequest){
+        userService.createUser(userRequest);
+        return new ResponseEntity<>("User added successfully",HttpStatus.CREATED);
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<String>updateUser(@PathVariable Long id , @RequestBody User user){
-        if(userService.updateUser(id,user)){
+    public ResponseEntity<String>updateUser(@PathVariable Long id , @RequestBody UserRequest userRequest){
+        if(userService.updateUser(id,userRequest)){
             return ResponseEntity.ok("User Updated Successfully");
         }else{
             return ResponseEntity.notFound().build();
