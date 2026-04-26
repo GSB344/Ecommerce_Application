@@ -1,4 +1,4 @@
-package com.ecom.userservice;
+package com.ecom.service;
 
 import com.ecom.dtos.AddressDTO;
 import com.ecom.dtos.UserRequest;
